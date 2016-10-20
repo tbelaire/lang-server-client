@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 import json
 import subprocess
+import threading
 import os
 import re
+
+try:
+    from Queue import Queue, Empty
+except ImportError:
+    from queue import Queue, Empty  # python 3.x
 
 # Local config options
 import config
@@ -19,12 +25,24 @@ class LangServer:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
+            close_fds=True,  # Possibly only useful on Posix
             universal_newlines=True)
+
+        self.queue = Queue()
+        self.io_thread = threading.Thread(
+            target=self.response_handler)
+
+        self.io_thread.daemon = True # thread dies with the program
+        self.io_thread.start()
 
         self.header_regex = re.compile("(?P<header>(\w|-)+): (?P<value>\d+)")
         # The first unused id.  Incremented with every request.
         self.next_id = 1
 
+    def response_handler(self):
+        while True:
+            response = self.read_response()
+            self.queue.put(response)
 
     def read_headers(self):
         """Reads in the headers for a response"""
@@ -44,6 +62,7 @@ class LangServer:
         return json.loads(content)
 
     def format_request(self, request):
+        """Converts the request into json and adds the Content-Length header"""
         content = json.dumps(request, indent=2)
         content_length = len(content)
 
@@ -87,10 +106,10 @@ if rls.server.poll() != None:
     print("Exited!")
 
 print("Response:")
-response = rls.read_response()
+response = rls.queue.get(True)
 print(json.dumps(response, indent=2))
 print("Response:")
-response = rls.read_response()
+response = rls.queue.get(True)
 print(json.dumps(response, indent=2))
 
 
